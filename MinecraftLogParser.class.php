@@ -5,6 +5,7 @@ class MinecraftLogParser
 {
 
 	private $verbose = false;
+	private $dbh = false;
 	private $debugging = false;
 
 	private $warnings = array();
@@ -14,16 +15,48 @@ class MinecraftLogParser
 	private $mc_server_name = null;
 	private $path = null;
 	private $results_mode = null;
+	
+	protected $achievements = null;
+	protected $player_achievement_cache = null;
 
 	
-	public function __construct($path=null, $result_mode=null, $verbose=null, $mc_server_name=null, $debugging=null)
+	public function __construct($path=null, $result_mode=null, $verbose=null, $mc_server_name=null, $dbh=null, $debugging=null)
 	{
 		if($path!==null) $this->path = $path;
 		if($result_mode!==null) $this->result_mode = $result_mode;
 		if($verbose!==null) $this->verbose = $verbose;
 		if($mc_server_name!==null) $this->mc_server_name = $mc_server_name;
+		if($dbh!==null) $this->setDBH($dbh);
 		if($debugging!==null) $this->debugging = $debugging;
+		
+		$this->fetchAchievements();
+		$this->player_achievement_cache = null;
 	}// constructor
+
+
+	public function setDBH($dbh)
+	{
+		$this->dbh = $dbh;
+
+	}
+
+
+	protected function fetchAchievements()
+	{
+		$this->achievements = null;
+		$sql = 'SELECT * from achievements';
+		try
+		{
+			$sth = $this->dbh->prepare($sql);
+			$sth->execute();
+			$this->achievements = $sth->fetchAll();
+			//echo "DEBUG Set achievements to:\n";
+			//print_r($this->achievements);
+		}
+		catch (PDOException $e) {
+			$this->warnings[] = 'Unabled to fetch achievements: '.$e->getMessage();
+		}
+	}
 
 
 	public function parse($path=null, $result_mode=null, $mc_server_name=null) 
@@ -70,7 +103,7 @@ class MinecraftLogParser
 			if($found)
 			{
 				$file_date = $matches[1];
-				if($this->verbose>1) echo 'NOTICE Parsing file: '.$filename.' (determined date '.$file_date.")\n";
+				if($this->verbose>-1) echo 'NOTICE Parsing file: '.$filename.' (determined date '.$file_date.")\n";
 			}
 			else continue;
 
@@ -94,7 +127,7 @@ class MinecraftLogParser
 			{
 	
 				//DEBUG
-				/*if(strpos($l, 'I AM A SERVER')!=false)// && strpos($l, '/nick')!==false )
+				/*if(strpos($l, ' Congratulations ')!=false)// && strpos($l, '/nick')!==false )
 				{
 					echo "\n !!!!!!!!!!!!!!!!!!!!!!!!!!!! THIS IS IT THIS IS IT THIS IS IT !!!!!!!!!!!!!!!!!!!!!!! \n\n";
 					echo "DEBUG LINE:\n";
@@ -104,10 +137,6 @@ class MinecraftLogParser
 					echo "\n";
 					echo "\n";
 					echo "\n";
-					echo 'DEBUG currently online';
-					print_r($online);
-					//exit;
-					//$this->debugging = 5;
 					echo "\n";
 					echo "\n";
 					echo "\n";
@@ -326,7 +355,23 @@ class MinecraftLogParser
 							// We want the latest first
 							if(empty($current_nicknames[$line_data['uuid']])) $current_nicknames[$line_data['uuid']] = $line_data['ign'];
 							if(empty($uuid_mapping[$line_data['uuid']])) $uuid_mapping[$line_data['uuid']] = array();
-							if(!in_array($line_data['ign'], $uuid_mapping[$line_data['uuid']])) array_unshift($uuid_mapping[$line_data['uuid']], $line_data['ign']); 
+							// ALWAYS put latest first, even if the ign was already in the listA
+							// If the ign is ALREADY the first one, then nothing is needed to be done
+							if(count($uuid_mapping[$line_data['uuid']])<1 || $line_data['ign']!=$uuid_mapping[$line_data['uuid']][0])
+							{
+								// If the ign is ALREADY in the uuid mapping, we need to delete the pre-existing element with the ign
+								if(in_array($line_data['ign'], $uuid_mapping[$line_data['uuid']])) 
+								{
+									echo 'DEBUG This is it! That special case where a player ('.$current_nicknames[$line_data['uuid']].') has gone back to an old IGN ('.$line_data['ign'].")\n";
+									$index_to_delete = array_search($line_data['ign'], $uuid_mapping[$line_data['uuid']]);
+									echo 'DEBUG Index to delete (so it can be re-added as first) is: '.$index_to_delete.' which has value: '.$uuid_mapping[$line_data['uuid']][$index_to_delete]."\n";
+									unset($uuid_mapping[$line_data['uuid']][$index_to_delete]);
+									// Now reindex the mapping, since mapping is a regular numerical type array
+									$uuid_mapping[$line_data['uuid']] = array_values($uuid_mapping[$line_data['uuid']]);
+									
+								}
+								array_unshift($uuid_mapping[$line_data['uuid']], $line_data['ign']); 
+							}
 						}
 
 						// uuid is critical
@@ -465,6 +510,7 @@ class MinecraftLogParser
 									$found = preg_match($pattern, $line_data['command'], $matches);
 									if($found)
 									{
+										if(substr($matches[2], strlen($matches[2])-2)=='[m') $matches[2] = substr($matches[2], 0, strlen($matches[2])-2);
 										$player_data[$line_data['uuid']]['chat_messages'][$line_data['timestamp']] = array('message'=>$matches[2], 'to'=>$matches[1], 'type'=>'msg');
 										//echo 'DEBUG Found msg: '.$matches[2].' to: '.$matches[1]."\n";
 										$chat_target_uuid = false;
@@ -490,6 +536,7 @@ class MinecraftLogParser
 									$found = preg_match($pattern, $line_data['command'], $matches);
 									if($found)
 									{	
+										if(substr($matches[1], strlen($matches[1])-2)=='[m') $matches[1] = substr($matches[1], 0, strlen($matches[1])-2);
 										$player_data[$line_data['uuid']]['chat_messages'][$line_data['timestamp']] = array('message'=>$matches[1], 'to'=>(empty($last_chat_target[$line_data['uuid']]) ? 'UNKNOWN' : $last_chat_target[$line_data['uuid']].' (UNCERTAIN)'), 'type'=>'r');
 										//echo 'DEBUG Found r: '.$matches[1]."\n";
 									}
@@ -498,11 +545,26 @@ class MinecraftLogParser
 							else if ($line_data['line_type']=='chat')
 							{
 								if($this->debugging>5) echo 'DEBUG adding line to '.$line_data['uuid'].'\'s chat: '.$line_data['chat_message']."\n";
+								if(substr($line_data['chat_message'], strlen($line_data['chat_message'])-2)=='[m') $line_data['chat_message'] = substr($line_data['chat_message'], 0, strlen($line_data['chat_message'])-2);
 								$player_data[$line_data['uuid']]['chat_messages'][$line_data['timestamp']] = array('message'=>$line_data['chat_message'], 'to'=>'EVERYONE','type'=>'chat');
 							}
 							else if ($line_data['line_type']=='death')
 							{
 								$player_data[$line_data['uuid']]['deaths'][$line_data['death_method']][$line_data['timestamp']] = (!empty($line_data['death_extra']) ? $line_data['death_extra'] : '');
+							}
+							else if (strpos($line_data['line_type'], 'achievement_')===0)
+							{
+								$achievement_alias = str_replace('achievement_', '', $line_data['line_type']);
+								// Look for a pre-exising achievement of this type in the database
+
+								if(empty($mc_server_id))
+								{
+									if($this->mc_server_name) $mc_server_id = self::getMCServerIDWithName($this->mc_server_name, $this->dbh);
+									if(!$mc_server_id && $this->mc_server_id) $mc_server_id = $this->mc_server_id;
+								}
+								// Save achievement data in cache and also to the database
+								$this->insertOrUpdatePlayerAchievement($line_data['uuid'], $achievement_alias, $line_data['timestamp'], $mc_server_id, array('line'=>$line_data['line'], 'confirmed_by'=>'log'));
+	
 							}
 							
 							if(in_array($line_data['uuid'], $online)) $player_data[$line_data['uuid']][(empty($line_data['denied']) ? '' : 'denied_').$line_data['line_type']][] = $line_data;
@@ -528,6 +590,12 @@ class MinecraftLogParser
 			$time_data[$uuid] = array();
 			ksort($te);
 			$time_data = $this->getTimeData($te);
+			$time_achievements = $time_data['achievements'];
+			unset($time_data['achievements']);
+			if(is_array($time_achievements) && count($time_achievements)) 
+			{
+				foreach($time_achievements as $taa=>$tat) $this->insertOrUpdatePlayerAchievement($uuid, $taa, $tat, $mc_server_id, array('line'=>'determined by time data parsed from logs', 'confirmed_by'=>'log'));
+			}
 			foreach($time_data as $tdk=>$tdv) $player_data[$uuid][$tdk] = $tdv;
 			//echo 'DEBUG time_data for '.$uuid.": \n";
 			//print_r($time_data);
@@ -565,6 +633,80 @@ class MinecraftLogParser
 		return $this->data;
 
 	}
+
+
+        protected function fetchPlayerAchievement($uuid, $achievement_alias, $mc_server_id=null)
+        {
+                //TODO Deal with [er=server achievements
+                $sth = $this->dbh->prepare('SELECT pa.id AS player_achievement_id, pa.*, a.* FROM player_achievements pa INNER JOIN achievements a ON a.id = pa.achievement_id WHERE pa.player_uuid = :player_uuid AND a.alias = :achievement_alias');
+                $sth->execute(array(':player_uuid'=>$uuid, ':achievement_alias' => $achievement_alias));
+                return $sth->fetch();
+        }
+
+
+	protected function insertOrUpdatePlayerAchievement($uuid, $achievement_alias, $when_achieved_timestamp, $mc_server_id, $extra_data=null, $dbh_in=null)
+	{
+	
+		if($this->verbose>2) echo 'Notice uuid: '.$uuid.' has earned "'.$achievement_alias.'" according to '.$extra_data['confirmed_by']."\n";
+
+	
+		if(empty($mc_server_id))
+		{
+			if($this->mc_server_name) $mc_server_id = self::getMCServerIDWithName($this->mc_server_name, $this->dbh);
+			if(!$mc_server_id && $this->mc_server_id) $mc_server_id = $this->mc_server_id;
+		}
+		
+		$achievement_id = null;
+		foreach($this->achievements as $a)
+		{
+			if($a['alias']==$achievement_alias)
+			{
+				$achievement_id = $a['id'];
+				break;
+			}
+		}
+
+		if(empty($achievement_id)) 
+		{
+			echo "ERROR We need the achievement ID\n";
+			return;
+		}
+
+		$pre_existing_achievement = false;		
+		if(empty($this->player_achievement_cache[$uuid][$achievement_alias]))
+		{
+			//echo 'DEBUG found a '.$achievement_alias.' achievement for '.u$uid.' with achievement_id: '.$achievement_id."\n";
+			$pre_existing_achievement = $this->fetchPlayerAchievement($uuid, $achievement_alias, $mc_server_id);;
+			if($pre_existing_achievement) $this->player_achievement_cache[$uuid][$achievement_alias] = $pre_existing_achievement;
+		}
+		$sql = false;
+		$sth_replacements = null;
+		if(is_array($this->player_achievement_cache[$uuid][$achievement_alias]) && !empty($this->player_achievement_cache[$uuid][$achievement_alias]['when_achieved']))
+		{
+			if($when_achieved_timestamp<strtotime($this->player_achievement_cache[$uuid][$achievement_alias]['when_achieved']))
+			{
+				$sql = 'UPDATE player_achievements SET when_achieved = :when_achieved, mc_server_id = :mc_server_id WHERE id = :player_achievement_id';
+				$sth_replacements = array(':when_achieved'=>date('Y-m-d H:i:s', $when_achieved_timestamp), ':mc_server_id'=>$mc_server_id, ':player_achievement_id'=>$this->player_achievement_cache[$uuid][$achievement_alias]['player_achievement_id']);
+			}
+		}
+		else
+		{
+			// Insert new
+			$sql = "INSERT INTO player_achievements (player_uuid, achievement_id, when_achieved, mc_server_id, log_line, confirmed_by) VALUES (:uuid, :achievement_id, :when_achieved, :mc_server_id, :line, 'log')";
+			$sth_replacements = array(':uuid'=>$uuid, ':achievement_id'=>$achievement_id, ':when_achieved'=>date('Y-m-d H:i:s', $when_achieved_timestamp), ':mc_server_id'=>$mc_server_id, ':line'=>$extra_data['line']);
+		}	
+		if($sql)
+		{
+			$sth = $this->dbh->prepare($sql);
+			$result = $sth->execute($sth_replacements);
+			if($result)
+			{
+				$this->player_achievement_cache[$uuid][$achievement_alias]['when_achieved'] = date('Y-m-d H:i:s', $when_achieved_timestamp);
+			}
+		}		
+
+	}
+
 
 
 	private function parseLine($line)
@@ -605,8 +747,8 @@ class MinecraftLogParser
 			),
 			'death' => array
 			(
-				'pattern' => '@^\[([\d]+:[\d]+:[\d]+)\][\s]+\[(Server thread/INFO)\]:[\s]+(?:§[0-9a-z]{1}([\S]+)§[0-9a-z]{1}|([\S]+))[\s]+(?:(died)|(drowned)|tried to swim in (lava)|was (slain|shot|burnt|blown up) (?:by|to a crisp))(?:[\s]+(.*))?@',
-				'mapping' => array('line','time','message_type','ign','ign','death_method','death_method','death_method','death_method','death_extra'),
+				'pattern' => '@^\[([\d]+:[\d]+:[\d]+)\][\s]+\[(Server thread/INFO)\]:[\s]+(?:§[0-9a-z]{1}([\S]+)§[0-9a-z]{1}|([\S]+))[\s]+(?:(died)|(drowned)|tried to swim in (lava)|(went up in flames)|was (slain|shot|burnt|blown up|pummeled) (?:by|to a crisp))(?:[\s]+(.*))?@',
+				'mapping' => array('line','time','message_type','ign','ign','death_method','death_method','death_method','death_method','death_method','death_extra'),
 			),
 			'kick' => array
 			(
@@ -621,6 +763,23 @@ class MinecraftLogParser
 			),
 
 		);
+
+		// Parse achievements as well??
+		if($this->achievements)
+		{
+			foreach($this->achievements as $a)
+			{
+				if($a['check_method']=='log')
+				{
+					$patterns['achievement_'.$a['alias']] = array
+					(
+						'pattern' => $a['log_pattern'],
+						'mapping' => explode(', ', $a['pattern_mapping']), 
+						'additional_data' => array('achievement_id'=>$a['id']),
+					);
+				}
+			}
+		}
 
 		$data = array();
 		foreach($patterns as $p_type=>$p)
@@ -638,6 +797,13 @@ class MinecraftLogParser
 					//echo 'DEBUG Found a '.$p_type.": \n"; 
 					//print_r($data);
 				//}
+				if(!empty($p['additional_data']) && count($p['additional_data']))
+				{
+					foreach($p['additional_data'] as $ad_key=>$ad_value)
+					{
+						$data[$ad_key] = $ad_value;
+					}
+				}
 				break;
 			}
 		}
@@ -647,11 +813,13 @@ class MinecraftLogParser
 
 	private function getTimeData($te)
 	{
+		$milestone_hours = array(500, 1000, 2000, 5000);
 		$data = array();
 		$data['first_login'] = false;
 		$data['last_logout'] = false;
 		$data['seconds_played'] = 0;
-		$data['days_active'] = false;
+		$data['days_active'] = 0;
+		$data['achievements'] = null;
 		$on_server = false;
 
 		// IMPORTANT $te is expected to be sorted on key BEFORE here
@@ -678,6 +846,14 @@ class MinecraftLogParser
 				{
 					if(!$on_server) $this->warnings[] = 'No login found for logout at '.$timestamp."\n";
 					else $data['seconds_played'] += ($timestamp - $on_server);
+					foreach($milestone_hours as $mh) 
+					{
+						if(empty($data['achievements'][$mh.'_hours']) && ($data['seconds_played']/(60*60))>(int)$mh) 
+						{
+							$data['achievements'][$mh.'_hours'] = $timestamp - (($data['seconds_played']/(60*60))-$mh);
+							echo 'DEBUG this player hit '.$mh.' hours at '.date('Y-m-d H:i:s', $timestamp)."\n";
+						}
+					}
 					$on_server = false;
 					if ($data['last_logout']===false || $timestamp>$data['last_logout']) $data['last_logout'] = $timestamp;
 				}
@@ -753,10 +929,19 @@ class MinecraftLogParser
 		return $this->data;
 	}
 
-
-	public function saveDataToDatabase($dbh, $mc_server_name=null)
+	public static function getMCServerIDWithName($mc_server_name, $dbh)
 	{
-		if(!is_object($dbh)) 
+			$sth = $dbh->prepare('SELECT id FROM mc_servers WHERE name = :mc_server_name');	
+			$sth->execute(array(':mc_server_name'=>$mc_server_name));
+			return $sth->fetchColumn();
+	}
+
+
+	public function saveDataToDatabase($dbh=null, $mc_server_name=null)
+	{
+		if($dbh && is_object($dbh)) $this->setDBH($dbh);
+
+		if(!is_object($this->dbh)) 
 		{
 			throw new Exception('You must set dbh as a PDO instance');
 			return false;
@@ -772,13 +957,14 @@ class MinecraftLogParser
 			}
 		}
 
-		$sth = $dbh->prepare('SELECT id FROM mc_servers WHERE name = :mc_server_name');	
-		$sth->execute(array(':mc_server_name' => $mc_server_name));
-		$mc_server_id = $sth->fetchColumn();
+		if($mc_server_name) $mc_server_id = self::getMCServerIDWithName($mc_server_name, $this->dbh);
+
+		if(!$mc_server_id && $this->mc_server_id) $mc_server_id = $this->mc_server_id;
+
 		if(!$mc_server_id)
 		{
 			throw new Exception('There is no Minecraft server named "'.$mc_server_name.'"');
-                        return false;
+			return false;
 		}
 
 		if(!is_array($this->data) && count($this->data)<1)
@@ -794,35 +980,36 @@ class MinecraftLogParser
 			{
 				if(!empty($pd['igns']))
 				{
-					$sth = $dbh->prepare('SELECT name FROM players WHERE uuid = :uuid');	
+					$sth = $this->dbh->prepare('SELECT name FROM players WHERE uuid = :uuid');	
 					$sth->execute(array(':uuid' => $uuid));
 					$ign = $sth->fetchColumn();
 					if($ign===false)
 					{
 						// No match. Do an insert
-						$stmt = $dbh->prepare('INSERT INTO players (uuid, name, old_names) VALUES (:uuid, :name, :old_names)');
+						$stmt = $this->dbh->prepare('INSERT INTO players (uuid, name, old_names) VALUES (:uuid, :name, :old_names)');
 						if(!$stmt->execute(array(':uuid' => $uuid, ':name'=>$pd['igns'][0], ':old_names'=>(count($pd['igns'])>1 ? implode(', ',array_splice($pd['igns'], 1)) : null))))
 						$this->warnings[] = 'Trouble inserting player with uuid: '.$uuid;
 					}
 					else if($ign!==$pd['igns'][0])
 					{
+						//echo 'DEBUG Here igns for ign of '.$ign.' is: '.print_r($pd['igns'], true)."\n";
 						// UUID match, but not an IGN match
 						// Player likely updated their IGN
 						//$this->warnings[] = 'uuid: '.$uuid.' has player entry, but the ign is not: "'.$pd['igns'][0].'" (it is '.$ign.')';
-						$stmt = $dbh->prepare('UPDATE players set name=:name, old_names=:old_names, names_last_checked=NULL WHERE uuid = :uuid');
+						$stmt = $this->dbh->prepare('UPDATE players set name=:name, old_names=:old_names, names_last_checked=NULL WHERE uuid = :uuid');
 						if(!$stmt->execute(array(':uuid' => $uuid, ':name'=>$pd['igns'][0], ':old_names'=>(count($pd['igns'])>1 ? implode(', ',array_splice($pd['igns'], 1)) : null))))
 						$this->warnings[] = 'Trouble updating player with uuid: '.$uuid;
 					}
 				}
 
-				$sth = $dbh->prepare('SELECT count(*) FROM player_data WHERE player_uuid = :uuid');	
+				$sth = $this->dbh->prepare('SELECT count(*) FROM player_data WHERE player_uuid = :uuid');	
 				$sth->execute(array(':uuid' => $uuid));
 				$match_count = $sth->fetchColumn();
 				if($match_count)
 				{
 					// TODO Something more intelligent
 					// but for now, just delete iti pre-existing player_data rows
-					$stmt = $dbh->prepare('DELETE FROM player_data WHERE player_uuid = :uuid');
+					$stmt = $this->dbh->prepare('DELETE FROM player_data WHERE player_uuid = :uuid');
 					if(!$stmt->execute(array(':uuid' => $uuid)))
 					$this->warnings[] = 'Trouble deleting player_data for uuid: '.$uuid;
 				}
@@ -836,7 +1023,7 @@ class MinecraftLogParser
 				if(empty($pd['kick'])) $pd['kick'] = null;			
 	
 				// Do an insert of the player data
-				$stmt = $dbh->prepare('INSERT INTO player_data (player_uuid, mc_server_id, first_login, last_logout, seconds_played, days_active, chat_messages, current_nickname, nicknames, favorite_commands, most_denied_commands, deaths, kicks) VALUES (:uuid, :mc_server_id, :first_login, :last_logout, :seconds_played, :days_active, :chat_messages, :current_nickname, :nicknames, :favorite_commands, :most_denied_commands, :deaths, :kicks)');
+				$stmt = $this->dbh->prepare('INSERT INTO player_data (player_uuid, mc_server_id, first_login, last_logout, seconds_played, days_active, chat_messages, current_nickname, nicknames, favorite_commands, most_denied_commands, deaths, kicks) VALUES (:uuid, :mc_server_id, :first_login, :last_logout, :seconds_played, :days_active, :chat_messages, :current_nickname, :nicknames, :favorite_commands, :most_denied_commands, :deaths, :kicks)');
 				if(!$stmt->execute(array(':uuid' => $uuid, ':mc_server_id'=>$mc_server_id, ':first_login'=>date('Y-m-d H:i:s', $pd['first_login']), ':last_logout'=>date('Y-m-d H:i:s', $pd['last_logout']), ':seconds_played'=>$pd['seconds_played'], ':days_active'=>serialize($pd['days_active']), ':chat_messages'=>serialize($pd['chat_messages']), ':current_nickname'=>$pd['current_nickname'], ':nicknames'=>serialize($pd['nicknames']), ':favorite_commands'=>serialize($pd['favorite_commands']), ':most_denied_commands'=>serialize($pd['most_denied_commands']), ':deaths'=>serialize($pd['deaths']), ':kicks'=>serialize($pd['kick']))))
 				$this->warnings[] = 'Trouble inserting player with uuid: '.$uuid;
 			}

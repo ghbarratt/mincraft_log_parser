@@ -18,8 +18,7 @@ set_include_path(get_include_path().PATH_SEPARATOR.__DIR__);
 if($argc>2) $output = strtolower($argv[2]);
 else $output = 'php_serialized_array';
 
-if(stripos($output, 'database')!==false)
-//&& is_file('configure_database.inc.php')) 
+if(is_file(__DIR__.DIRECTORY_SEPARATOR.'configure_database.inc.php')) 
 {
 	include_once 'configure_database.inc.php';
 }
@@ -59,7 +58,7 @@ if(stripos($output, 'database')!==false && !$dbh)
 	exit;
 }
 
-$mlp = new MinecraftLogParser($path, $mode, $verbose, $debugging);
+$mlp = new MinecraftLogParser($path, $mode, $verbose, null, $dbh);
 $mlp->parse();
 if(stripos($output, 'database')!==false)
 {
