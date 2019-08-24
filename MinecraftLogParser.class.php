@@ -126,14 +126,14 @@ class MinecraftLogParser
 			foreach($lines as $li=>$l)
 			{
 	
-				//DEBUG
-				if(strpos($l, ' Rugged')!=false && strpos($l, '/nick')!==false && strpos($l, 'van')!==false )
-				{
-					echo "\n !!!!!!!!!!!!!!!!!!!!!!!!!!!! THIS IS IT THIS IS IT THIS IS IT !!!!!!!!!!!!!!!!!!!!!!! \n\n";
-					echo 'DEBUG Line (line '.($li+1).' of '.$filename.":\n";
-					echo $l;
-					echo "\n";
-				}
+				// DEBUG
+				//if(strpos($l, ' Rugged')!=false && strpos($l, '/nick')!==false && strpos($l, 'van')!==false )
+				//{
+					//echo "\n !!!!!!!!!!!!!!!!!!!!!!!!!!!! THIS IS IT THIS IS IT THIS IS IT !!!!!!!!!!!!!!!!!!!!!!! \n\n";
+					//echo 'DEBUG Line (line '.($li+1).' of '.$filename.":\n";
+					//echo $l;
+					//echo "\n";
+				//}
 
 				$line_data = $next_line_data;
 				$next_line_data = $this->parseLine($l);
@@ -165,13 +165,13 @@ class MinecraftLogParser
 						//$line_data['nick'] = preg_replace('/^~/', '', $line_data['nick']);
 						
 						$line_data['nick'] = preg_replace('/&r$/', '', $line_data['nick']);
-						if($this->debugging>1 && strpos($line_data['nick'], '[0;')!==false) 
-						{
-							echo "\n !!!!!!!!!!!!!!!!!!!!!!!!!!!! THIS IS IT THIS IS IT THIS IS IT !!!!!!!!!!!!!!!!!!!!!!! \n\n";
-							echo 'DEBUG Trying to find nickname: "'.$line_data['nick']."\" in :\n";
-							print_r($current_nicknames);
-							sleep(2);
-						}
+						//if($this->debugging>1 && strpos($line_data['nick'], '[0;')!==false) 
+						//{
+							//echo "\n !!!!!!!!!!!!!!!!!!!!!!!!!!!! THIS IS IT THIS IS IT THIS IS IT !!!!!!!!!!!!!!!!!!!!!!! \n\n";
+							//echo 'DEBUG Trying to find nickname: "'.$line_data['nick']."\" in :\n";
+							//print_r($current_nicknames);
+							//sleep(2);
+						//}
 						if(in_array($line_data['nick'], $current_nicknames)) $line_data['uuid'] = array_search($line_data['nick'], $current_nicknames); 
 						else 
 						{
@@ -653,7 +653,7 @@ class MinecraftLogParser
 		}
 		$sql = false;
 		$sth_replacements = null;
-		if(is_array($this->player_achievement_cache[$uuid][$achievement_alias]) && !empty($this->player_achievement_cache[$uuid][$achievement_alias]['when_achieved']))
+		if(isset($this->player_achievement_cache[$uuid][$achievement_alias]) && !empty($this->player_achievement_cache[$uuid][$achievement_alias]['when_achieved']))
 		{
 			if($when_achieved_timestamp<strtotime($this->player_achievement_cache[$uuid][$achievement_alias]['when_achieved']))
 			{
@@ -690,7 +690,27 @@ class MinecraftLogParser
 
 		// IMPORTANT - Currently assumes that a line can only match one pattern
 		// List the important patterns first
-		$patterns = array
+
+		$patterns = array();
+
+		// Parse achievements FIRST
+		if($this->achievements)
+		{
+			foreach($this->achievements as $a)
+			{
+				if($a['check_method']=='log')
+				{
+					$patterns['achievement_'.$a['alias']] = array
+					(
+						'pattern' => $a['log_pattern'],
+						'mapping' => explode(', ', $a['pattern_mapping']), 
+						'additional_data' => array('achievement_id'=>$a['id']),
+					);
+				}
+			}
+		}
+
+		$patterns = array_merge($patterns, array
 		(
 			'uuid' => array
 			(
@@ -734,24 +754,7 @@ class MinecraftLogParser
 				'mapping' => array('line','time','message_type','nick','chat_message'),
 			),
 
-		);
-
-		// Parse achievements as well??
-		if($this->achievements)
-		{
-			foreach($this->achievements as $a)
-			{
-				if($a['check_method']=='log')
-				{
-					$patterns['achievement_'.$a['alias']] = array
-					(
-						'pattern' => $a['log_pattern'],
-						'mapping' => explode(', ', $a['pattern_mapping']), 
-						'additional_data' => array('achievement_id'=>$a['id']),
-					);
-				}
-			}
-		}
+		));
 
 		$data = array();
 		foreach($patterns as $p_type=>$p)
@@ -793,15 +796,15 @@ class MinecraftLogParser
 		$data['first_login'] = false;
 		$data['last_logout'] = false;
 		$data['seconds_played'] = 0;
-		$data['seconds_played_in_last_6_months'] = 0;
+		$data['seconds_played_in_last_90_days'] = 0;
 		$data['days_active'] = 0;
 		$data['achievements'] = null;
 		$on_server = false;
 
 		// IMPORTANT $te is expected to be sorted on key BEFORE here
 		ksort($te);
-		$six_months_ago = strtotime('-6 MONTH');
-		//echo 'DEBUG 6 months ago: '.date('Y-m-d', $six_months_ago)."\n";
+		$ninety_days_ago = strtotime('-90 DAY');
+		//echo 'DEBUG 90 days ago: '.date('Y-m-d', $ninety_days_ago)."\n";
 
 		foreach($te as $timestamp=>$e_set)
 		{
@@ -825,7 +828,7 @@ class MinecraftLogParser
 					if(!$on_server) $this->warnings[] = 'No login found for logout at '.$timestamp."\n";
 					else 
 					{
-						if ($on_server > $six_months_ago) $data['seconds_played_in_last_6_months'] += ($timestamp - $on_server);
+						if ($on_server > $ninety_days_ago) $data['seconds_played_in_last_90_days'] += ($timestamp - $on_server);
 						$data['seconds_played'] += ($timestamp - $on_server);
 					}
 					foreach($milestone_hours as $mh) 
@@ -850,7 +853,7 @@ class MinecraftLogParser
 	{
 		$summary = array();
 	
-		$pull_straight = array('igns', 'first_login', 'last_logout', 'seconds_played', 'seconds_played_in_last_6_months', 'days_active', 'chat_messages', 'current_nickname', 'nicknames', 'deaths', 'kick');
+		$pull_straight = array('igns', 'first_login', 'last_logout', 'seconds_played', 'seconds_played_in_last_90_days', 'days_active', 'chat_messages', 'current_nickname', 'nicknames', 'deaths', 'kick');
 
 		// For each player we want:
 		//	1. "Time Data"
@@ -992,10 +995,10 @@ class MinecraftLogParser
 				if($match_count)
 				{
 					// TODO Something more intelligent
-					// but for now, just delete iti pre-existing player_data rows
-					$stmt = $this->dbh->prepare('DELETE FROM player_data WHERE player_uuid = :uuid');
-					if(!$stmt->execute(array(':uuid' => $uuid)))
-					$this->warnings[] = 'Trouble deleting player_data for uuid: '.$uuid;
+					// but for now, just delete the pre-existing player_data row FOR THE PARTICULAR mc_server_id
+					$stmt = $this->dbh->prepare('DELETE FROM player_data WHERE player_uuid = :player_uuid AND mc_server_id = :mc_server_id');
+					if(!$stmt->execute(array(':player_uuid'=>$uuid, 'mc_server_id'=>$mc_server_id )))
+						$this->warnings[] = 'Trouble deleting player_data for uuid: '.$uuid;
 				}
 
 				if(empty($pd['days_active'])) $pd['days_active'] = null;			
@@ -1005,11 +1008,11 @@ class MinecraftLogParser
 				if(empty($pd['most_denied_commands'])) $pd['most_denied_commands'] = null;			
 				if(empty($pd['deaths'])) $pd['deaths'] = null;			
 				if(empty($pd['kick'])) $pd['kick'] = null;			
-				if(empty($pd['seconds_played_in_last_6_months'])) $pd['seconds_played_in_last_6_months'] = null;			
+				if(empty($pd['seconds_played_in_last_90_days'])) $pd['seconds_played_in_last_90_days'] = null;			
 	
 				// Do an insert of the player data
-				$stmt = $this->dbh->prepare('INSERT INTO player_data (player_uuid, mc_server_id, first_login, last_logout, seconds_played, seconds_played_in_last_6_months, days_active, chat_messages, current_nickname, nicknames, favorite_commands, most_denied_commands, deaths, kicks) VALUES (:uuid, :mc_server_id, :first_login, :last_logout, :seconds_played, :seconds_played_in_last_6_months, :days_active, :chat_messages, :current_nickname, :nicknames, :favorite_commands, :most_denied_commands, :deaths, :kicks)');
-				if(!$stmt->execute(array(':uuid' => $uuid, ':mc_server_id'=>$mc_server_id, ':first_login'=>date('Y-m-d H:i:s', $pd['first_login']), ':last_logout'=>date('Y-m-d H:i:s', $pd['last_logout']), ':seconds_played'=>$pd['seconds_played'], ':seconds_played_in_last_6_months'=>$pd['seconds_played_in_last_6_months'], ':days_active'=>serialize($pd['days_active']), ':chat_messages'=>serialize($pd['chat_messages']), ':current_nickname'=>$pd['current_nickname'], ':nicknames'=>serialize($pd['nicknames']), ':favorite_commands'=>serialize($pd['favorite_commands']), ':most_denied_commands'=>serialize($pd['most_denied_commands']), ':deaths'=>serialize($pd['deaths']), ':kicks'=>serialize($pd['kick']))))
+				$stmt = $this->dbh->prepare('INSERT INTO player_data (player_uuid, mc_server_id, updated, first_login, last_logout, seconds_played, seconds_played_in_last_90_days, days_active, chat_messages, current_nickname, nicknames, favorite_commands, most_denied_commands, deaths, kicks) VALUES (:uuid, :mc_server_id, NOW(), :first_login, :last_logout, :seconds_played, :seconds_played_in_last_90_days, :days_active, :chat_messages, :current_nickname, :nicknames, :favorite_commands, :most_denied_commands, :deaths, :kicks)');
+				if(!$stmt->execute(array(':uuid' => $uuid, ':mc_server_id'=>$mc_server_id, ':first_login'=>date('Y-m-d H:i:s', $pd['first_login']), ':last_logout'=>date('Y-m-d H:i:s', $pd['last_logout']), ':seconds_played'=>$pd['seconds_played'], ':seconds_played_in_last_90_days'=>$pd['seconds_played_in_last_90_days'], ':days_active'=>serialize($pd['days_active']), ':chat_messages'=>serialize($pd['chat_messages']), ':current_nickname'=>$pd['current_nickname'], ':nicknames'=>serialize($pd['nicknames']), ':favorite_commands'=>serialize($pd['favorite_commands']), ':most_denied_commands'=>serialize($pd['most_denied_commands']), ':deaths'=>serialize($pd['deaths']), ':kicks'=>serialize($pd['kick']))))
 				$this->warnings[] = 'Trouble inserting player with uuid: '.$uuid;
 			}
 			return true;
