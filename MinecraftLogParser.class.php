@@ -138,7 +138,7 @@ class MinecraftLogParser
 				$line_data = $next_line_data;
 				$next_line_data = $this->parseLine($l);
 
-				if(count($line_data))
+				if(is_array($line_data) && count($line_data))
 				{
 					if(empty($line_data['ign']) && !empty($line_data['nick']))
 					{	
@@ -483,7 +483,7 @@ class MinecraftLogParser
 									if($found)
 									{
 										if(substr($matches[2], strlen($matches[2])-2)=='[m') $matches[2] = substr($matches[2], 0, strlen($matches[2])-2);
-										$player_data[$line_data['uuid']]['chat_messages'][$line_data['timestamp']] = array('message'=>$matches[2], 'to'=>$matches[1], 'type'=>'msg');
+										$player_data[$line_data['uuid']]['chat_messages'][$line_data['timestamp']] = array('message'=>utf8_encode($matches[2]), 'to'=>$matches[1], 'type'=>'msg');
 										//echo 'DEBUG Found msg: '.$matches[2].' to: '.$matches[1]."\n";
 										$chat_target_uuid = false;
 										foreach($online as $temp_uuid)
@@ -830,6 +830,7 @@ class MinecraftLogParser
 					{
 						if ($on_server > $ninety_days_ago) $data['seconds_played_in_last_90_days'] += ($timestamp - $on_server);
 						$data['seconds_played'] += ($timestamp - $on_server);
+						//echo 'DEBUG Adding '.($timestamp - $on_server).' to seconds_played ('.$data['seconds_played'].")\n";
 					}
 					foreach($milestone_hours as $mh) 
 					{
@@ -1011,9 +1012,30 @@ class MinecraftLogParser
 				if(empty($pd['seconds_played_in_last_90_days'])) $pd['seconds_played_in_last_90_days'] = null;			
 	
 				// Do an insert of the player data
-				$stmt = $this->dbh->prepare('INSERT INTO player_data (player_uuid, mc_server_id, updated, first_login, last_logout, seconds_played, seconds_played_in_last_90_days, days_active, chat_messages, current_nickname, nicknames, favorite_commands, most_denied_commands, deaths, kicks) VALUES (:uuid, :mc_server_id, NOW(), :first_login, :last_logout, :seconds_played, :seconds_played_in_last_90_days, :days_active, :chat_messages, :current_nickname, :nicknames, :favorite_commands, :most_denied_commands, :deaths, :kicks)');
-				if(!$stmt->execute(array(':uuid' => $uuid, ':mc_server_id'=>$mc_server_id, ':first_login'=>date('Y-m-d H:i:s', $pd['first_login']), ':last_logout'=>date('Y-m-d H:i:s', $pd['last_logout']), ':seconds_played'=>$pd['seconds_played'], ':seconds_played_in_last_90_days'=>$pd['seconds_played_in_last_90_days'], ':days_active'=>serialize($pd['days_active']), ':chat_messages'=>serialize($pd['chat_messages']), ':current_nickname'=>$pd['current_nickname'], ':nicknames'=>serialize($pd['nicknames']), ':favorite_commands'=>serialize($pd['favorite_commands']), ':most_denied_commands'=>serialize($pd['most_denied_commands']), ':deaths'=>serialize($pd['deaths']), ':kicks'=>serialize($pd['kick']))))
-				$this->warnings[] = 'Trouble inserting player with uuid: '.$uuid;
+				$params = array(
+					':uuid' => $uuid, 
+					':mc_server_id' => $mc_server_id, 
+					':first_login' => date('Y-m-d H:i:s', $pd['first_login']), 
+					':last_logout' => date('Y-m-d H:i:s', $pd['last_logout']), 
+					':seconds_played' => $pd['seconds_played'], 
+					':seconds_played_in_last_90_days' => $pd['seconds_played_in_last_90_days'],
+					':days_active' => serialize($pd['days_active']), 
+					':chat_messages' => serialize($pd['chat_messages']), 
+					':current_nickname' => $pd['current_nickname'], 
+					':nicknames' => serialize($pd['nicknames']), 
+					':favorite_commands' => serialize($pd['favorite_commands']),
+					':most_denied_commands' => serialize($pd['most_denied_commands']),
+			       		':deaths' => serialize($pd['deaths']),
+					':kicks' => serialize($pd['kick']),
+				);
+				try {
+					$stmt = $this->dbh->prepare('INSERT INTO player_data (player_uuid, mc_server_id, updated, first_login, last_logout, seconds_played, seconds_played_in_last_90_days, days_active, chat_messages, current_nickname, nicknames, favorite_commands, most_denied_commands, deaths, kicks) VALUES (:uuid, :mc_server_id, NOW(), :first_login, :last_logout, :seconds_played, :seconds_played_in_last_90_days, :days_active, :chat_messages, :current_nickname, :nicknames, :favorite_commands, :most_denied_commands, :deaths, :kicks)');
+					$stmt->execute($params);
+				} catch (PDOException $e) {
+					$message = 'Trouble inserting player data with uuid: '.$uuid.'. SQL Error "'.$e->getMessage().'"';
+					$this->warnings[] = $message;
+					echo $message.PHP_EOL;
+				}
 			}
 			return true;
 		}
